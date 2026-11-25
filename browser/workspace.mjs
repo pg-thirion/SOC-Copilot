@@ -20,7 +20,7 @@ try{
   const page=await browser.newPage({viewport:{width:1440,height:900},acceptDownloads:true});const errors=[];page.on("pageerror",e=>errors.push(e.message));
   const waitText=async(selector,text)=>page.waitForFunction(([s,t])=>document.querySelector(s)?.textContent.includes(t),[selector,text]);
   const login=async username=>{await page.locator("#username").fill(username);await page.locator("#password").fill(password);await page.locator("#login-form button").click();await page.locator("#workspace").waitFor({state:"visible"});await waitText("#identity",username);await page.waitForFunction(()=>document.querySelectorAll("#sample option").length===8);};
-  await page.goto(origin);await login("analyst");
+  await Promise.all([page.waitForResponse(r=>r.url().endsWith("/api/session")),page.goto(origin)]);await page.locator("#login").waitFor({state:"visible"});await login("analyst");
   await page.locator("#sample").selectOption({label:"Password spraying"});await page.locator("#run").click();await waitText("#classification","Possible password spraying");await waitText("#case-id","Revision 1");
   await page.locator("#timeline-query").fill("employee1");await waitText("#timeline-count","1 of 6");await page.locator("#timeline-query").clear();
   await page.locator("#integrity").click();await waitText("#integrity-result","Fingerprint verified");
