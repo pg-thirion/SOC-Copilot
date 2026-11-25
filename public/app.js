@@ -1,10 +1,10 @@
 const $=id=>document.getElementById(id);
 const node=(tag,text,cls)=>{const el=document.createElement(tag);el.textContent=text;if(cls)el.className=cls;return el;};
-let examples=[],report=null;
+let examples=[],report=null,current=null,offset=0,auditBefore=null,epoch=0;
+let account=null;
 async function init(){
   try{
-    const response=await fetch("/api/examples");if(!response.ok)throw Error("Unable to load scenarios.");
-    const data=await response.json();examples=data.examples;
+    const data=await api("/api/examples"); $("sample").replaceChildren(node("option","Choose a scenario")); $("sample").firstChild.value="";examples=data.examples;
     for(const [i,e] of examples.entries()){const option=node("option",e.name);option.value=i;$("sample").append(option);}
     $("ai").disabled=!data.aiAvailable;
     $("model-status").textContent=data.aiAvailable?"Model configured. Only rule summaries and evidence IDs are sent.":"Offline rules active. Configure OLLAMA_MODEL to enable local AI.";
@@ -33,16 +33,83 @@ $("run").addEventListener("click",async()=>{
   $("error").textContent="";$("run").disabled=true;$("export").disabled=true;
   try{
     const events=JSON.parse($("events").value);
-    const response=await fetch("/api/investigate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({events,ai:$("ai").checked})});
-    const r=await response.json();if(!response.ok)throw Error(r.error||"Investigation failed.");
-    report=r;render(r);
+    const generation=epoch; const c=await api("/api/investigate",{method:"POST",body:JSON.stringify({events,ai:$("ai").checked})}); if(generation!==epoch)return; showCase(c); await loadCases();
   }catch(e){$("error").textContent=e.message+" Previous results, if shown, have not changed.";$("export").disabled=!report;}
   finally{$("run").disabled=false;}
 });
 $("export").addEventListener("click",()=>{
   if(!report)return;
-  const exported={...report,review:{disposition:$("disposition").value,notes:$("notes").value,exportedAt:new Date().toISOString()}};
+  const exported={...report,caseId:current.id,revision:current.revision,owner:current.owner,review:{...current.review,exportedAt:new Date().toISOString()}};
   const url=URL.createObjectURL(new Blob([JSON.stringify(exported,null,2)],{type:"application/json"}));
   const a=document.createElement("a");a.href=url;a.download="soc-investigation.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
-init();
+
+async function api(path,options={}){
+  const r=await fetch(path,{...options,headers:{"Content-Type":"application/json",...options.headers},cache:"no-store"});
+  const data=await r.json();
+  if(r.status===401&&path!=="/api/login"){signedOut();throw Error("Session expired. Sign in again.");}
+  if(!r.ok)throw Error(data.error||"Request failed.");
+  return data;
+}
+function signedOut(){
+  epoch++;account=null;current=null;report=null;examples=[];offset=0;auditBefore=null;
+  $("workspace").hidden=true;$("login").hidden=false;$("logout").hidden=true;$("identity").textContent="AUTHENTICATION REQUIRED";
+  for(const id of ["events","notes","password","error","save-status","case-id","audit-status"]) {const e=$(id);if("value" in e)e.value="";else e.textContent="";}
+  $("file").value="";$("sample").replaceChildren(node("option","Choose a scenario"));$("sample").firstChild.value="";
+  $("severity").textContent="Pending";$("severity").className="";$("count").textContent="0";$("total").textContent="0";$("classification").textContent="Awaiting intake";
+  for(const id of ["findings","timeline","cases","audit-items"])$(id).replaceChildren();
+  $("timeline-empty").hidden=false;$("ai-output").textContent="No investigation yet.";$("export").disabled=true;$("save").disabled=true;$("ai").checked=false;
+  $("audit-panel").hidden=true;$("more-audit").hidden=true;$("more-cases").hidden=true;
+}
+async function signedIn(user){
+  account=user;epoch++;$("workspace").hidden=false;$("login").hidden=true;$("logout").hidden=false;
+  $("identity").textContent=user.username+" / "+user.role;$("audit-panel").hidden=user.role!=="supervisor";
+  await init();await loadCases();
+}
+$("login-form").addEventListener("submit",async e=>{
+  e.preventDefault();const button=e.currentTarget.querySelector("button");button.disabled=true;$("login-error").textContent="";
+  try{const user=await api("/api/login",{method:"POST",body:JSON.stringify({username:$("username").value,password:$("password").value})});await signedIn(user);}
+  catch(e){$("login-error").textContent=e.message;}finally{$("password").value="";button.disabled=false;}
+});
+$("logout").addEventListener("click",async()=>{try{await api("/api/logout",{method:"POST"});signedOut();}catch(e){$("error").textContent=e.message;}});
+function showCase(c){
+  current=c;report=c.report;render(c.report);
+  $("case-id").textContent="Case "+c.id+" | Revision "+c.revision+" | Owner "+c.owner;
+  $("disposition").value=c.review.disposition;$("notes").value=c.review.notes;$("save").disabled=false;$("save-status").textContent="Saved revision "+c.revision;
+}
+async function loadCases(append=false){
+  const generation=epoch;
+  if(!append)offset=0;
+  try{
+    const data=await api("/api/cases?offset="+offset);if(generation!==epoch)return;
+    if(!append)$("cases").replaceChildren();
+    if(!data.items.length&&!append)$("cases").append(node("p","No saved cases.","muted"));
+    for(const c of data.items){
+      const button=node("button",c.classification+" / "+c.severity.toUpperCase(),c.severity);button.append(node("small",c.disposition+" · "+c.owner+" · "+c.updated));
+      button.addEventListener("click",async()=>{const g=epoch;try{const item=await api("/api/cases/"+c.id);if(g===epoch)showCase(item);}catch(e){$("error").textContent=e.message;}});$("cases").append(button);
+    }
+    offset=data.nextOffset;$("more-cases").hidden=offset===null;
+  }catch(e){$("error").textContent=e.message;}
+}
+$("refresh").addEventListener("click",()=>loadCases());
+$("more-cases").addEventListener("click",()=>loadCases(true));
+$("save").addEventListener("click",async()=>{
+  if(!current)return;const id=current.id,generation=epoch;$("save").disabled=true;
+  try{
+    const c=await api("/api/cases/"+id,{method:"PATCH",body:JSON.stringify({revision:current.revision,disposition:$("disposition").value,notes:$("notes").value})});
+    if(generation!==epoch)return;if(current?.id===id)showCase(c);await loadCases();
+  }catch(e){$("save-status").textContent=e.message;}finally{if(current)$("save").disabled=false;}
+});
+for(const id of ["notes","disposition"])$(id).addEventListener("input",()=>{$("save-status").textContent="Unsaved changes. Save before exporting.";$("export").disabled=true;});
+async function loadAudit(append=false){
+  const generation=epoch;
+  try{const data=await api("/api/audit"+(append&&auditBefore?"?before="+auditBefore:""));if(generation!==epoch)return;
+    $("audit-status").textContent=(data.valid?"Integrity check passed":"Integrity check FAILED")+" · "+data.checked+" records";
+    if(!append)$("audit-items").replaceChildren();
+    for(const item of data.items)$("audit-items").append(node("p",item.at+" | "+item.actor+" | "+item.action+" | "+item.target));
+    auditBefore=data.items.at(-1)?.seq||null;$("more-audit").hidden=data.items.length<100;
+  }catch(e){$("audit-status").textContent=e.message;}
+}
+$("audit").addEventListener("click",()=>loadAudit());
+$("more-audit").addEventListener("click",()=>loadAudit(true));
+api("/api/session").then(signedIn).catch(()=>signedOut());

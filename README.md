@@ -1,74 +1,60 @@
 # SOC Copilot
 
-A local-first security operations investigation workspace. Designed as a defensive cybersecurity portfolio project with deterministic triage and optional local AI commentary.
+Security operations case management and evidence-linked investigation with optional local AI. A single-organisation, single-instance application with analyst and supervisor roles.
 
-## Quick start
+## Start locally
 
-Requires Node.js 20 or newer. No npm packages, credentials or cloud services are required.
+Requires Node.js 24 LTS. No third-party npm dependencies.
 
 ```bash
 git clone https://github.com/pg-thirion/SOC-Copilot.git
 cd SOC-Copilot
 npm test
-npm start
+npm run provision -- supervisor supervisor
+npm run provision -- analyst analyst
+npm run key
 ```
 
-Open http://localhost:3000. Select a synthetic scenario, investigate it, review evidence and record an analyst disposition. Export the investigation as JSON.
-
-### Optional local AI
-
-Install Ollama separately, start its local service and pull a suitable installed chat model (for example, qwen2.5:3b if available). Set the model name to match your installation.
+Store the generated 64-character key securely and reuse it on every restart. Losing it makes the encrypted cases unrecoverable. Never commit the key or user configuration.
 
 PowerShell:
-
 ```powershell
-$env:OLLAMA_MODEL="qwen2.5:3b"
+$env:SOC_DATA_KEY = "<your saved key>"
 npm start
 ```
 
 Linux/macOS:
-
 ```bash
-OLLAMA_MODEL=qwen2.5:3b npm start
+export SOC_DATA_KEY='<your saved key>'
+npm start
 ```
 
-Enable the AI checkbox before investigating. Only fixed rule summaries, possible technique mappings and evidence IDs are sent to the loopback Ollama endpoint. No raw log content, usernames, hostnames or IP addresses are sent. AI output is separately labelled, advisory and never used to change deterministic severity or execute actions. If the model fails, the rules remain available.
+Open http://localhost:3000 and sign in. Select a demo, investigate, review the evidence and save your disposition. Reopen cases from the case queue. Analysts access their own cases. Supervisors access all cases and the audit trail. User provisioning is an operator-only CLI, not a web signup. Restart after updating the user file. Remove a user from the file to revoke access.
 
-## Capabilities
+## Features
 
-- JSON alert intake, four synthetic scenarios and 500-event limit.
-- Ten-minute correlation of failed and successful authentication events by user and source IP.
-- Classification of reported malware, phishing, privilege changes, possible data transfer and defence tampering.
-- Evidence IDs, ordered event timeline, indicative MITRE ATT&CK technique references and conditional remediation guidance.
-- Human review, disposition, notes and explicit JSON export.
-- Responsive browser UI without external assets.
+- Six defensive rule families including time-window authentication correlation.
+- Synthetic scenarios, bounded JSON import, evidence timeline, indicative ATT&CK mappings.
+- Encrypted case persistence in SQLite, revision-checked review updates and paginated case queue.
+- Passwords hashed with scrypt, opaque hashed sessions, eight-hour expiry, bounded login attempts, role and ownership checks.
+- HMAC-chained audit trail for login, logout, case creation, views and reviews. An operator with the key can rewrite the chain, and truncation of a valid suffix is not detected without external checkpoints.
+- Optional local Ollama commentary. Fixed rule summaries and evidence IDs only, never raw event fields. The model cannot execute actions or override rule severity.
+- JSON export of the saved review and original evidence. Exported files require separate protection.
+
+## Local AI
+
+Install Ollama separately, run its loopback service, and set OLLAMA_MODEL to an installed chat model before starting the app. No external AI endpoint is accepted. Model output may be wrong and must be reviewed.
+
+## Deployment and assurance
+
+See [deployment runbook](docs/OPERATIONS.md) and [security model](docs/SECURITY.md). This is a hardened reference implementation, not certified production-ready. Independent security review, backup/restore rehearsal, load testing, monitoring and integration acceptance are required before processing real incident data.
 
 ## Event schema
 
-Each event is an object with required string type and optional string timestamp, user, host, ip, outcome and detail. Use ISO 8601 timestamps with offsets. For authentication correlation, provide timestamp, user, ip and outcome (failure or success).
+JSON array of 1 to 500 objects. Each object requires a string `type`; optional strings are `timestamp`, `user`, `host`, `ip`, `outcome`, `detail`. Use ISO 8601 timestamps with offsets. Supported types: authentication, malware_detection, privilege_change, phishing_report, data_transfer_alert, defence_tamper. Other types remain unclassified. Authentication correlation requires timestamp, user, ip and failure/success outcome.
 
-```json
-[
-  {
-    "timestamp": "2026-11-25T08:00:00Z",
-    "type": "authentication",
-    "user": "analyst@example.test",
-    "ip": "192.0.2.44",
-    "outcome": "failure"
-  }
-]
-```
+Rule matches are hypotheses, not confirmed incidents. No match does not imply safety. Remediation recommendations require analyst approval.
 
-Supported types: authentication, malware_detection, privilege_change, phishing_report, data_transfer_alert, defence_tamper. Other types are retained as evidence but do not trigger a rule.
+## Tests
 
-## Security model and limitations
-
-The server binds only to IPv4 loopback, validates Host and Origin, limits JSON input, uses a restrictive CSP, renders untrusted data as text, and does not store investigations on disk. Exports deliberately contain raw evidence and must be protected. There is no live SIEM, authentication, multi-user persistence, threat intelligence integration or automated remediation. Do not expose this prototype directly to the internet.
-
-A rule match is not proof of compromise. ATT&CK mappings are hypotheses. No match means unclassified, not safe. Model output may be incorrect and needs review. This is a demonstrator, not a production incident response platform.
-
-## Architecture
-
-Browser dashboard → local HTTP API → deterministic analysis engine → optional local Ollama commentary. The analyst retains control of classification disposition and response decisions.
-
-Run `npm test` to execute the rule regression suite. The project has no external Node dependencies.
+`npm test` runs rule, security, persistence and HTTP integration tests. GitHub Actions runs the same suite on Node 24.
