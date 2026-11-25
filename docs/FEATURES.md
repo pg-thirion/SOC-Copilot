@@ -33,7 +33,7 @@ Version 3.0 adds the following independently usable capabilities.
 | Scoped queue search and filtering | workflow / HTTP tests |
 | Scoped queue metrics | workflow / HTTP tests |
 | Executive summary export | workflow / HTTP tests |
-| Evidence timeline filtering | browser source and UI smoke check |
+| Evidence timeline filtering | Chromium workflow / UI source checks |
 | Three new synthetic scenarios | analysis tests |
 
-The automated suite does not establish real-world detection performance, live-model accuracy or security certification. Browser interactions require a real browser acceptance run; the source smoke check is not a substitute.
+The automated suite does not establish real-world detection performance, live-model accuracy or security certification. The CI browser job exercises the core end-to-end flow in Chromium. Other browsers, assistive technology, production infrastructure and the real Ollama model still require independent acceptance testing.

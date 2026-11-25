@@ -3,8 +3,9 @@ const node=(tag,text,cls)=>{const el=document.createElement(tag);el.textContent=
 let examples=[],report=null,current=null,offset=0,auditBefore=null,epoch=0;
 let account=null;
 async function init(){
+  const generation=epoch;
   try{
-    const data=await api("/api/examples"); $("sample").replaceChildren(node("option","Choose a scenario")); $("sample").firstChild.value="";examples=data.examples;
+    const data=await api("/api/examples");if(generation!==epoch)return; $("sample").replaceChildren(node("option","Choose a scenario")); $("sample").firstChild.value="";examples=data.examples;
     for(const [i,e] of examples.entries()){const option=node("option",e.name);option.value=i;$("sample").append(option);}
     $("ai").disabled=!data.aiAvailable;
     $("model-status").textContent=data.aiAvailable?"Model configured. Only rule summaries and evidence IDs are sent.":"Offline rules active. Configure OLLAMA_MODEL to enable local AI.";
@@ -57,7 +58,7 @@ function signedOut(){
   $("severity").textContent="Pending";$("severity").className="";$("count").textContent="0";$("total").textContent="0";$("classification").textContent="Awaiting intake";
   for(const id of ["findings","timeline","cases","audit-items","tasks","workflow-history","evidence-info"])$(id).replaceChildren();
   $("timeline-empty").hidden=false;$("ai-output").textContent="No investigation yet.";$("export").disabled=true;$("save").disabled=true;$("ai").checked=false;
-  $("audit-panel").hidden=true;$("more-audit").hidden=true;$("more-cases").hidden=true;for(const id of ["query","timeline-query","case-title","case-tags"])$(id).value="";for(const id of ["queue-metrics","case-due","workflow-status","integrity-result","timeline-count"])$(id).textContent="";for(const id of ["save-workflow","summary-export","integrity"])$(id).disabled=true;
+  $("audit-panel").hidden=true;$("more-audit").hidden=true;$("more-cases").hidden=true;for(const id of ["query","filter-tag","timeline-query","case-title","case-tags"])$(id).value="";for(const id of ["queue-metrics","case-due","workflow-status","integrity-result","timeline-count"])$(id).textContent="";for(const id of ["save-workflow","summary-export","integrity"])$(id).disabled=true;
 }
 async function signedIn(user){
   account=user;epoch++;$("workspace").hidden=false;$("login").hidden=true;$("logout").hidden=false;
@@ -79,7 +80,7 @@ async function loadCases(append=false){
   const generation=epoch;
   if(!append)offset=0;
   try{
-    const params=new URLSearchParams({offset:String(offset),q:$("query").value,status:$("filter-status").value,severity:$("filter-severity").value,priority:$("filter-priority").value,overdue:String($("filter-overdue").checked)});const data=await api("/api/cases?"+params);if(generation!==epoch)return;
+    const params=new URLSearchParams({offset:String(offset),q:$("query").value,status:$("filter-status").value,severity:$("filter-severity").value,priority:$("filter-priority").value,tag:$("filter-tag").value.trim(),overdue:String($("filter-overdue").checked)});const data=await api("/api/cases?"+params);if(generation!==epoch)return;
     if(!append)$("cases").replaceChildren();
     if(!data.items.length&&!append)$("cases").append(node("p","No saved cases.","muted"));
     for(const c of data.items){
@@ -138,7 +139,7 @@ function renderWorkflow(c){
 }
 async function loadMetrics(){const g=epoch;try{const m=await api("/api/metrics");if(g===epoch)$("queue-metrics").textContent=(m.truncated?"Latest 5,000: ":"")+m.total+" cases · "+m.open+" open · "+m.high+" high · "+m.overdue+" overdue";}catch(e){$("error").textContent=e.message;}}
 for(const id of ["filter-status","filter-severity","filter-priority","filter-overdue"])$(id).addEventListener("change",()=>loadCases());
-$("query").addEventListener("change",()=>loadCases());
+for(const id of ["query","filter-tag"])$(id).addEventListener("change",()=>loadCases());
 $("save-workflow").addEventListener("click",async()=>{
   if(!current)return;const id=current.id,g=epoch;$("save-workflow").disabled=true;
   const workflow={title:$("case-title").value,status:$("case-status").value,priority:$("case-priority").value,tags:$("case-tags").value.split(",").map(x=>x.trim()).filter(Boolean),completed:[...$("tasks").querySelectorAll("input:checked")].map(e=>e.value)};

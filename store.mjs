@@ -35,8 +35,8 @@ export function openStore(path,crypto){
     return {valid:true,checked:seq,head:prev};
   }
   function scoped(user){
-    const rows=user.role==="supervisor"?db.prepare("SELECT * FROM cases ORDER BY updated DESC,id LIMIT 5001").all():db.prepare("SELECT * FROM cases WHERE owner=? ORDER BY updated DESC,id LIMIT 5001").all(user.username);
-    return {items:rows.slice(0,5000).map(row=>summarize(unpack(row))),truncated:rows.length>5000};
+    const rows=user.role==="supervisor"?db.prepare("SELECT * FROM cases ORDER BY updated DESC,id LIMIT 5001").iterate():db.prepare("SELECT * FROM cases WHERE owner=? ORDER BY updated DESC,id LIMIT 5001").iterate(user.username);
+    const items=[];let truncated=false;for(const row of rows){if(items.length===5000){truncated=true;break;}items.push(summarize(unpack(row)));}return {items,truncated};
   }
   return {
     metrics(user){const scope=scoped(user);return {...caseMetrics(scope.items),truncated:scope.truncated};},
