@@ -23,9 +23,7 @@ function render(r){
     const list=node("ul","");for(const a of f.actions)list.append(node("li",a));card.append(list);$("findings").append(card);
   }
   $("timeline").replaceChildren();$("timeline-empty").hidden=true;
-  for(const e of [...r.events].sort((a,b)=>(Date.parse(a.timestamp)||0)-(Date.parse(b.timestamp)||0))){
-    const tr=node("tr","");for(const value of [e.id,e.timestamp,e.type,[e.user,e.host].filter(Boolean).join(" / "),e.ip,e.outcome,e.detail])tr.append(node("td",value||"—"));$("timeline").append(tr);
-  }
+  renderTimeline(r);renderEvidence(r);
   $("ai-output").textContent=r.ai.text;$("limitations").replaceChildren(...r.limitations.map(x=>node("li",x)));
   $("disposition").value="Pending review";$("notes").value="";$("export").disabled=false;
 }
@@ -39,7 +37,7 @@ $("run").addEventListener("click",async()=>{
 });
 $("export").addEventListener("click",()=>{
   if(!report)return;
-  const exported={...report,caseId:current.id,revision:current.revision,owner:current.owner,review:{...current.review,exportedAt:new Date().toISOString()}};
+  const exported={...report,caseId:current.id,revision:current.revision,owner:current.owner,workflow:current.workflow,review:{...current.review,exportedAt:new Date().toISOString()}};
   const url=URL.createObjectURL(new Blob([JSON.stringify(exported,null,2)],{type:"application/json"}));
   const a=document.createElement("a");a.href=url;a.download="soc-investigation.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
@@ -57,9 +55,9 @@ function signedOut(){
   for(const id of ["events","notes","password","error","save-status","case-id","audit-status"]) {const e=$(id);if("value" in e)e.value="";else e.textContent="";}
   $("file").value="";$("sample").replaceChildren(node("option","Choose a scenario"));$("sample").firstChild.value="";
   $("severity").textContent="Pending";$("severity").className="";$("count").textContent="0";$("total").textContent="0";$("classification").textContent="Awaiting intake";
-  for(const id of ["findings","timeline","cases","audit-items"])$(id).replaceChildren();
+  for(const id of ["findings","timeline","cases","audit-items","tasks","workflow-history","evidence-info"])$(id).replaceChildren();
   $("timeline-empty").hidden=false;$("ai-output").textContent="No investigation yet.";$("export").disabled=true;$("save").disabled=true;$("ai").checked=false;
-  $("audit-panel").hidden=true;$("more-audit").hidden=true;$("more-cases").hidden=true;
+  $("audit-panel").hidden=true;$("more-audit").hidden=true;$("more-cases").hidden=true;for(const id of ["query","timeline-query","case-title","case-tags"])$(id).value="";for(const id of ["queue-metrics","case-due","workflow-status","integrity-result","timeline-count"])$(id).textContent="";for(const id of ["save-workflow","summary-export","integrity"])$(id).disabled=true;
 }
 async function signedIn(user){
   account=user;epoch++;$("workspace").hidden=false;$("login").hidden=true;$("logout").hidden=false;
@@ -75,20 +73,20 @@ $("logout").addEventListener("click",async()=>{try{await api("/api/logout",{meth
 function showCase(c){
   current=c;report=c.report;render(c.report);
   $("case-id").textContent="Case "+c.id+" | Revision "+c.revision+" | Owner "+c.owner;
-  $("disposition").value=c.review.disposition;$("notes").value=c.review.notes;$("save").disabled=false;$("save-status").textContent="Saved revision "+c.revision;
+  $("disposition").value=c.review.disposition;$("notes").value=c.review.notes;$("save").disabled=false;$("save-status").textContent="Saved revision "+c.revision;renderWorkflow(c);
 }
 async function loadCases(append=false){
   const generation=epoch;
   if(!append)offset=0;
   try{
-    const data=await api("/api/cases?offset="+offset);if(generation!==epoch)return;
+    const params=new URLSearchParams({offset:String(offset),q:$("query").value,status:$("filter-status").value,severity:$("filter-severity").value,priority:$("filter-priority").value,overdue:String($("filter-overdue").checked)});const data=await api("/api/cases?"+params);if(generation!==epoch)return;
     if(!append)$("cases").replaceChildren();
     if(!data.items.length&&!append)$("cases").append(node("p","No saved cases.","muted"));
     for(const c of data.items){
-      const button=node("button",c.classification+" / "+c.severity.toUpperCase(),c.severity);button.append(node("small",c.disposition+" · "+c.owner+" · "+c.updated));
+      const button=node("button",c.title+" / "+c.severity.toUpperCase(),c.severity);button.append(node("small",c.priority+" · "+c.status+" · "+(c.overdue?"OVERDUE · ":"")+c.owner+" · "+c.updated));
       button.addEventListener("click",async()=>{const g=epoch;try{const item=await api("/api/cases/"+c.id);if(g===epoch)showCase(item);}catch(e){$("error").textContent=e.message;}});$("cases").append(button);
     }
-    offset=data.nextOffset;$("more-cases").hidden=offset===null;
+    offset=data.nextOffset;$("more-cases").hidden=offset===null;if(data.truncated)$("cases").append(node("p","Search limited to latest 5,000 cases.","muted"));if(!append)await loadMetrics();
   }catch(e){$("error").textContent=e.message;}
 }
 $("refresh").addEventListener("click",()=>loadCases());
@@ -112,4 +110,41 @@ async function loadAudit(append=false){
 }
 $("audit").addEventListener("click",()=>loadAudit());
 $("more-audit").addEventListener("click",()=>loadAudit(true));
+function renderTimeline(r){
+  const q=$("timeline-query").value.toLowerCase();$("timeline").replaceChildren();
+  const rows=[...r.events].filter(e=>Object.values(e).some(v=>String(v).toLowerCase().includes(q))).sort((a,b)=>(Date.parse(a.timestamp)||0)-(Date.parse(b.timestamp)||0));
+  for(const e of rows){const tr=node("tr","");for(const v of [e.id,e.timestamp,e.type,[e.user,e.host].filter(Boolean).join(" / "),e.ip,e.outcome,e.detail])tr.append(node("td",v||"—"));$("timeline").append(tr);}
+  $("timeline-count").textContent=rows.length+" of "+r.events.length+" events";
+}
+$("timeline-query").addEventListener("input",()=>{if(report)renderTimeline(report);});
+function renderEvidence(r){
+  const root=$("evidence-info");root.replaceChildren();const info=r.evidenceInfo;
+  $("integrity").disabled=!info;$("integrity-result").textContent="";
+  if(!info){root.textContent="Legacy case: evidence fingerprints unavailable.";return;}
+  root.append(node("p","Unique events: "+info.quality.uniqueEvents+" | Duplicates: "+info.duplicates+" | Missing timestamps: "+info.quality.missingTimestamps+" | Invalid IPs: "+info.quality.invalidSourceIPs),
+    node("p","Rule coverage: "+info.coverage.matched+"/"+info.coverage.total+" events; "+info.coverage.unmatched+" unmatched."),
+    node("p","Time range: "+(info.timeRange.first||"Unknown")+" to "+(info.timeRange.last||"Unknown")),
+    node("p","ATT&CK techniques: "+(info.techniques.join(", ")||"None")),
+    node("p","Event types: "+info.eventCounts.map(x=>x.type+" ("+x.count+")").join(", ")),
+    node("p","SHA-256 fingerprint: "+info.fingerprint));
+  for(const [kind,items] of Object.entries(info.indicators)){const detail=node("details","");detail.append(node("summary",kind+" ("+items.length+")"));for(const item of items)detail.append(node("p",item.value+" | "+item.evidence.join(", ")));root.append(detail);}
+}
+function renderWorkflow(c){
+  const w=c.workflow;$("case-title").value=w.title;$("case-status").value=w.status;$("case-priority").value=w.priority;$("case-tags").value=w.tags.join(", ");
+  $("case-due").textContent="Response target: "+w.dueAt+(w.status!=="Closed"&&Date.parse(w.dueAt)<Date.now()?" | OVERDUE":"");
+  $("tasks").replaceChildren();for(const task of c.report.evidenceInfo?.checklist||[]){const label=node("label","","check"),check=document.createElement("input");check.type="checkbox";check.value=task.id;check.checked=w.completed.includes(task.id);label.append(check,document.createTextNode(task.label));$("tasks").append(label);}
+  $("workflow-history").replaceChildren(...w.history.map(h=>node("p",h.at+" | "+h.actor+" | "+h.changed.join(", ")+" | "+h.status)));
+  $("save-workflow").disabled=false;$("summary-export").disabled=false;$("workflow-status").textContent="Saved revision "+c.revision;
+}
+async function loadMetrics(){const g=epoch;try{const m=await api("/api/metrics");if(g===epoch)$("queue-metrics").textContent=(m.truncated?"Latest 5,000: ":"")+m.total+" cases · "+m.open+" open · "+m.high+" high · "+m.overdue+" overdue";}catch(e){$("error").textContent=e.message;}}
+for(const id of ["filter-status","filter-severity","filter-priority","filter-overdue"])$(id).addEventListener("change",()=>loadCases());
+$("query").addEventListener("change",()=>loadCases());
+$("save-workflow").addEventListener("click",async()=>{
+  if(!current)return;const id=current.id,g=epoch;$("save-workflow").disabled=true;
+  const workflow={title:$("case-title").value,status:$("case-status").value,priority:$("case-priority").value,tags:$("case-tags").value.split(",").map(x=>x.trim()).filter(Boolean),completed:[...$("tasks").querySelectorAll("input:checked")].map(e=>e.value)};
+  try{const c=await api("/api/cases/"+id+"/workflow",{method:"PATCH",body:JSON.stringify({revision:current.revision,workflow})});if(g!==epoch)return;if(current?.id===id){current=c;renderWorkflow(c);$("case-id").textContent="Case "+c.id+" | Revision "+c.revision+" | Owner "+c.owner;}await loadCases();}
+  catch(e){$("workflow-status").textContent=e.message;}finally{if(current)$("save-workflow").disabled=false;}
+});
+$("integrity").addEventListener("click",async()=>{if(!current)return;const id=current.id,g=epoch;try{const result=await api("/api/cases/"+id+"/integrity");if(g===epoch&&current?.id===id)$("integrity-result").textContent=result.available?(result.valid?"Fingerprint verified":"Integrity mismatch"):"Legacy case: unavailable";}catch(e){$("integrity-result").textContent=e.message;}});
+$("summary-export").addEventListener("click",async()=>{if(!current)return;const id=current.id,g=epoch;try{const summary=await api("/api/cases/"+id+"/summary");if(g!==epoch||current?.id!==id)return;const url=URL.createObjectURL(new Blob([JSON.stringify(summary,null,2)],{type:"application/json"})),a=document.createElement("a");a.href=url;a.download="soc-summary-"+id+".json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){$("workflow-status").textContent=e.message;}});
 api("/api/session").then(signedIn).catch(()=>signedOut());

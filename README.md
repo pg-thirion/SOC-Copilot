@@ -58,3 +58,14 @@ Rule matches are hypotheses, not confirmed incidents. No match does not imply sa
 ## Tests
 
 `npm test` runs rule, security, persistence and HTTP integration tests. GitHub Actions runs the same suite on Node 24.
+
+
+## Version 3.0: expanded investigation and case management
+
+Additional alert types: MFA fatigue, suspicious PowerShell, persistence, ransomware, cloud policy changes, suspicious DNS, lateral movement and web attack alerts. These classify reported telemetry, not independently validated malicious activity. Password-spraying and distributed-authentication correlations require five distinct identities/sources within ten minutes. Identical normalised events do not inflate authentication correlation counts.
+
+Evidence intelligence includes SHA-256 per-event and case fingerprints (normalised evidence only), quality checks, duplicate counts, observed users/hosts/IPs/hash-like strings/domains, time range, event type counts, rule coverage and technique rollup. Observed indicators are not automatically malicious. Raw original byte-stream preservation is outside scope.
+
+Workflow adds case title, priority (P1–P4), lifecycle, tags, response checklist, due targets, overdue indicators and bounded workflow history. Closing or reopening a closed case requires supervisor approval; closing also requires a saved disposition. Due times are policy defaults of 4/24/72/168 hours from case creation, not regulatory or contractual SLAs. Queue search, filters and metrics respect ownership; global metrics and filtered search are limited to the latest 5,000 accessible cases and flag truncation. Timeline filtering and executive JSON summaries are available. Executive summaries exclude raw event data and notes but may include sensitive analyst titles. Existing cases retain their evidence and receive default workflow metadata when opened; fingerprints are unavailable for legacy reports.
+
+See docs/FEATURES.md for the feature/test matrix.

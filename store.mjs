@@ -1,3 +1,4 @@
+import {defaultWorkflow,updateWorkflow,summarize,filterCases,caseMetrics} from "./workflow.mjs";
 import {DatabaseSync} from "node:sqlite";
 import {randomUUID} from "node:crypto";
 export function openStore(path,crypto){
@@ -22,7 +23,7 @@ export function openStore(path,crypto){
     db.prepare("INSERT INTO audit VALUES(?,?,?,?,?,?,?)").run(seq,at,actor,action,target,prev,mac);
   }
   function allowed(row,user){return row&&(row.owner===user.username||user.role==="supervisor");}
-  function unpack(row){return {id:row.id,owner:row.owner,created:row.created,updated:row.updated,revision:row.revision,...crypto.open(row.payload,JSON.stringify([row.id,row.owner,row.created,row.updated,row.revision]))};}
+  function unpack(row){const c={id:row.id,owner:row.owner,created:row.created,updated:row.updated,revision:row.revision,...crypto.open(row.payload,JSON.stringify([row.id,row.owner,row.created,row.updated,row.revision]))};c.workflow??=defaultWorkflow(c.report,c.created);return c;}
   function seal(row,value){return crypto.seal(value,JSON.stringify([row.id,row.owner,row.created,row.updated,row.revision]));}
   function verifyAudit(){
     let seq=0,prev="genesis";
@@ -33,7 +34,12 @@ export function openStore(path,crypto){
     }
     return {valid:true,checked:seq,head:prev};
   }
+  function scoped(user){
+    const rows=user.role==="supervisor"?db.prepare("SELECT * FROM cases ORDER BY updated DESC,id LIMIT 5001").all():db.prepare("SELECT * FROM cases WHERE owner=? ORDER BY updated DESC,id LIMIT 5001").all(user.username);
+    return {items:rows.slice(0,5000).map(row=>summarize(unpack(row))),truncated:rows.length>5000};
+  }
   return {
+    metrics(user){const scope=scoped(user);return {...caseMetrics(scope.items),truncated:scope.truncated};},
     close:()=>db.close(),
     ping:()=>db.prepare("SELECT 1 AS ok").get().ok===1,
     audit:(actor,action,target="")=>tx(()=>append(actor,action,target)),
@@ -43,16 +49,22 @@ export function openStore(path,crypto){
     getSession(token){return db.prepare("SELECT * FROM sessions WHERE token=? AND expires>?").get(token,Date.now());},
     logout(token,actor){tx(()=>{db.prepare("DELETE FROM sessions WHERE token=?").run(token);append(actor,"logout","");});},
     create(user,report){return tx(()=>{const now=new Date().toISOString(),row={id:randomUUID(),owner:user.username,created:now,updated:now,revision:1};
-      const value={report,review:{disposition:"Pending review",notes:""}};
+      const value={report,review:{disposition:"Pending review",notes:""},workflow:defaultWorkflow(report,now)};
       db.prepare("INSERT INTO cases VALUES(?,?,?,?,?,?)").run(row.id,row.owner,row.created,row.updated,row.revision,seal(row,value));append(user.username,"case.created",row.id);return {...row,...value};});},
-    list(user,offset=0){
+    list(user,offset=0,filters={}){
+      if(Object.values(filters).some(Boolean)){const scope=scoped(user),matched=filterCases(scope.items,filters);return {items:matched.slice(offset,offset+50),nextOffset:matched.length>offset+50?offset+50:null,truncated:scope.truncated};}
       const rows=user.role==="supervisor"?db.prepare("SELECT * FROM cases ORDER BY updated DESC,id LIMIT 51 OFFSET ?").all(offset):db.prepare("SELECT * FROM cases WHERE owner=? ORDER BY updated DESC,id LIMIT 51 OFFSET ?").all(user.username,offset);
-      return {items:rows.slice(0,50).map(row=>{const c=unpack(row);return {id:c.id,owner:c.owner,updated:c.updated,revision:c.revision,severity:c.report.severity,classification:c.report.classification,disposition:c.review.disposition};}),nextOffset:rows.length>50?offset+50:null};
+      return {items:rows.slice(0,50).map(row=>{return summarize(unpack(row));}),nextOffset:rows.length>50?offset+50:null};
     },
     get(id,user){return tx(()=>{const row=db.prepare("SELECT * FROM cases WHERE id=?").get(id);if(!allowed(row,user))return null;const value=unpack(row);append(user.username,"case.viewed",id);return value;});},
     review(id,user,revision,review){return tx(()=>{const row=db.prepare("SELECT * FROM cases WHERE id=?").get(id);if(!allowed(row,user))return {status:404};if(row.revision!==revision)return {status:409};
       const current=unpack(row),next={...row,revision:row.revision+1,updated:new Date().toISOString()};
-      db.prepare("UPDATE cases SET updated=?,revision=?,payload=? WHERE id=?").run(next.updated,next.revision,seal(next,{report:current.report,review}),id);
-      append(user.username,"case.reviewed",id);return {status:200,value:{id,owner:row.owner,created:row.created,updated:next.updated,revision:next.revision,report:current.report,review}};});}
+      db.prepare("UPDATE cases SET updated=?,revision=?,payload=? WHERE id=?").run(next.updated,next.revision,seal(next,{report:current.report,review,workflow:current.workflow}),id);
+      append(user.username,"case.reviewed",id);return {status:200,value:{id,owner:row.owner,created:row.created,updated:next.updated,revision:next.revision,report:current.report,review,workflow:current.workflow}};});},
+    workflow(id,user,revision,patch){return tx(()=>{const row=db.prepare("SELECT * FROM cases WHERE id=?").get(id);if(!allowed(row,user))return {status:404};if(row.revision!==revision)return {status:409};
+      const c=unpack(row);let workflow;try{workflow=updateWorkflow(c,patch,user);}catch(e){return {status:400,error:e.message};}
+      const next={...row,revision:row.revision+1,updated:new Date().toISOString()};
+      db.prepare("UPDATE cases SET updated=?,revision=?,payload=? WHERE id=?").run(next.updated,next.revision,seal(next,{report:c.report,review:c.review,workflow}),id);
+      append(user.username,"case.workflow",id);return {status:200,value:{...c,updated:next.updated,revision:next.revision,workflow}};});}
   };
 }

@@ -1,3 +1,4 @@
+import {advancedFindings,describeEvidence,uniqueEvents} from "./analysis.mjs";
 // Deterministic, evidence-linked triage. No automated response actions.
 export function analyze(input) {
   if (!Array.isArray(input) || input.length < 1 || input.length > 500) throw Error("Provide 1 to 500 events.");
@@ -10,7 +11,8 @@ export function analyze(input) {
       clean[key]=v.trim();
     }
     if(!clean.type) throw Error("Every event requires a type.");
-    if(clean.timestamp && !Number.isFinite(Date.parse(clean.timestamp))) throw Error("Invalid timestamp.");
+    if(clean.timestamp && (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(clean.timestamp)||!Number.isFinite(Date.parse(clean.timestamp)))) throw Error("Invalid timestamp.");
+    if(clean.timestamp)clean.timestamp=new Date(clean.timestamp).toISOString();
     clean.type=clean.type.toLowerCase();
     clean.outcome=clean.outcome.toLowerCase();
     return clean;
@@ -20,7 +22,7 @@ export function analyze(input) {
     findings.push({category,severity,summary,evidence:ids,mitre,actions});
   }
   const byIdentity=new Map();
-  for(const e of events.filter(e=>e.type==="authentication" && e.user && e.ip)) {
+  for(const e of uniqueEvents(events).filter(e=>e.type==="authentication" && e.user && e.ip)) {
     const key=JSON.stringify([e.user,e.ip]);
     if(!byIdentity.has(key)) byIdentity.set(key,[]);
     byIdentity.get(key).push(e);
@@ -52,9 +54,11 @@ export function analyze(input) {
     const matched=events.filter(e=>e.type===type);
     if(matched.length) add(category,severity,summary,matched.map(e=>e.id),mitre,actions);
   }
+  findings.push(...advancedFindings(events));
+  const evidenceInfo=describeEvidence(events,findings);
   const rank={high:3,medium:2,low:1};
   findings.sort((a,b)=>rank[b.severity]-rank[a.severity]);
-  return {severity:findings[0]?.severity??"unclassified",classification:findings[0]?.category??"Insufficient evidence",findings,events,limitations:["Rule matches are hypotheses, not confirmed incidents.","ATT&CK mappings are indicative and require analyst validation.","No matching rule does not establish that an event is benign.","This engine evaluates supplied telemetry only. It does not query live systems."]};
+  return {severity:findings[0]?.severity??"unclassified",classification:findings[0]?.category??"Insufficient evidence",findings,events,evidenceInfo,limitations:["Rule matches are hypotheses, not confirmed incidents.","ATT&CK mappings are indicative and require analyst validation.","No matching rule does not establish that an event is benign.","This engine evaluates supplied telemetry only. It does not query live systems."]};
 }
 export const examples = [
   {
@@ -169,3 +173,9 @@ export const examples = [
     ]
   }
 ];
+
+examples.push(
+ {name:"Password spraying",events:Array.from({length:6},(_,i)=>({timestamp:"2026-11-25T08:0"+i+":00Z",type:"authentication",user:"employee"+i+"@example.test",ip:"192.0.2.42",outcome:"failure"}))},
+ {name:"Cloud and identity signals",events:[{timestamp:"2026-11-25T12:00:00Z",type:"cloud_policy_change",host:"cloud-demo",detail:"Synthetic policy alert"},{timestamp:"2026-11-25T12:02:00Z",type:"mfa_fatigue_alert",user:"employee@example.test",detail:"Synthetic MFA alert"}]},
+ {name:"Endpoint ransomware alert",events:[{timestamp:"2026-11-25T14:00:00Z",type:"ransomware_alert",host:"WS-DEMO",detail:"Synthetic file activity warning"},{timestamp:"2026-11-25T14:02:00Z",type:"persistence_alert",host:"WS-DEMO",detail:"Synthetic persistence alert"}]}
+);

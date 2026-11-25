@@ -1,3 +1,5 @@
+import {verifyEvidence} from "./analysis.mjs";
+import {statuses,priorities,executiveReport} from "./workflow.mjs";
 import http from "node:http";
 import {readFile,mkdir,chmod} from "node:fs/promises";
 import {dirname,resolve} from "node:path";
@@ -93,17 +95,37 @@ const server=http.createServer({maxHeaderSize:16384},async(req,res)=>{
     if(req.method==="GET"&&route==="/api/session")return json(res,200,{username:user.username,role:user.role});
     if(req.method==="POST"&&route==="/api/logout"){store.logout(token,user.username);return json(res,200,{ok:true},{"Set-Cookie":cookie("",0)});}
     if(req.method==="GET"&&route==="/api/examples")return json(res,200,{examples,aiAvailable:!!model});
-    if(req.method==="GET"&&route==="/api/cases")return json(res,200,store.list(user,page(url,"offset",0)));
+    if(req.method==="GET"&&route==="/api/metrics")return json(res,200,store.metrics(user));
+    if(req.method==="GET"&&route==="/api/cases"){
+      const filters={q:url.searchParams.get("q")||"",status:url.searchParams.get("status")||"",priority:url.searchParams.get("priority")||"",severity:url.searchParams.get("severity")||"",tag:url.searchParams.get("tag")||"",overdue:url.searchParams.get("overdue")==="true"};
+      if(filters.q.length>120||filters.tag.length>32||(filters.status&&!statuses.includes(filters.status))||(filters.priority&&!priorities.includes(filters.priority))||(filters.severity&&!["high","medium","low","unclassified"].includes(filters.severity)))throw new InputError("Invalid filters.");
+      return json(res,200,store.list(user,page(url,"offset",0),filters));
+    }
     if(req.method==="POST"&&route==="/api/investigate"){
       const input=await body(req);let report;
       try{report=analyze(input.events);}catch(e){throw new InputError(e.message);}
-      report.engineVersion="2.0.0";
+      report.engineVersion="3.0.0";
       if(input.ai===true&&model&&report.findings.length){
         if(aiActive>=2)return json(res,429,{error:"AI capacity reached. Retry or disable AI."},{"Retry-After":"10"});
         aiActive++;try{report.ai={status:"generated",text:await enrich(report)};}
         catch{report.ai={status:"unavailable",text:"Local AI unavailable. Rule findings remain available."};}finally{aiActive--;}
       }else report.ai={status:"not_requested",text:"No AI analysis generated."};
       return json(res,201,store.create(user,report));
+    }
+    const extra=/^\/api\/cases\/([a-f0-9-]{36})\/(workflow|integrity|summary)$/.exec(route);
+    if(extra){
+      const [,id,operation]=extra;
+      if(operation==="workflow"&&req.method==="PATCH"){
+        const input=await body(req);if(!Number.isSafeInteger(input.revision)||input.revision<1)throw new InputError("Invalid revision.");
+        const result=store.workflow(id,user,input.revision,input.workflow);
+        return json(res,result.status,result.value||{error:result.error||(result.status===409?"Case was changed. Reload before saving.":"Case not found.")});
+      }
+      if(req.method==="GET"&&(operation==="integrity"||operation==="summary")){
+        const c=store.get(id,user);if(!c)return json(res,404,{error:"Case not found."});
+        if(operation==="integrity")return json(res,200,{available:!!c.report.evidenceInfo,valid:verifyEvidence(c.report),fingerprint:c.report.evidenceInfo?.fingerprint||null});
+        store.audit(user.username,"case.summary",id);return json(res,200,executiveReport(c));
+      }
+      return json(res,405,{error:"Method not allowed."});
     }
     const match=/^\/api\/cases\/([a-f0-9-]{36})$/.exec(route);
     if(match&&req.method==="GET"){const value=store.get(match[1],user);return json(res,value?200:404,value||{error:"Case not found."});}

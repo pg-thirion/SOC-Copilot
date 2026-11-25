@@ -32,6 +32,22 @@ test("HTTP sessions, CSRF, case ownership, supervisor access and logout",{timeou
     assert.equal((await call(route,{method:"PATCH",cookie:bob,body:review})).status,404);
     assert.equal((await call(route,{method:"PATCH",cookie:alice,body:review})).status,200);
     assert.equal((await call(route,{method:"PATCH",cookie:alice,body:review})).status,409);
+    const workflow={revision:2,workflow:{title:"Endpoint case",status:"Awaiting approval",priority:"P1",tags:["edr"],completed:["T1"]}};
+    assert.equal((await call(route+"/workflow",{method:"PATCH",cookie:bob,body:workflow})).status,404);
+    assert.equal((await call(route+"/workflow",{method:"PATCH",cookie:alice,body:workflow})).status,200);
+    assert.equal((await call(route+"/workflow",{method:"PATCH",cookie:alice,body:workflow})).status,409);
+    const close={revision:3,workflow:{status:"Closed"}};
+    assert.equal((await call(route+"/workflow",{method:"PATCH",cookie:alice,body:close})).status,400);
+    assert.equal((await call(route+"/workflow",{method:"PATCH",cookie:supervisor,body:close})).status,200);
+    assert.equal((await call(route+"/integrity",{cookie:bob})).status,404);
+    assert.equal((await (await call(route+"/integrity",{cookie:alice})).json()).valid,true);
+    assert.equal((await call(route+"/summary",{cookie:bob})).status,404);
+    assert.equal((await (await call(route+"/summary",{cookie:alice})).json()).title,"Endpoint case");
+    assert.equal((await (await call("/api/cases?q=Endpoint&status=Closed",{cookie:alice})).json()).items.length,1);
+    assert.equal((await (await call("/api/cases?q=Endpoint",{cookie:bob})).json()).items.length,0);
+    assert.equal((await (await call("/api/metrics",{cookie:bob})).json()).total,0);
+    assert.equal((await (await call("/api/metrics",{cookie:supervisor})).json()).closed,1);
+    assert.equal((await call("/api/cases?priority=P0",{cookie:alice})).status,400);
     assert.equal((await call("/api/logout",{method:"POST",cookie:alice})).status,200);
     assert.equal((await call("/api/cases",{cookie:alice})).status,401);
   }finally{if(child&&child.exitCode===null){child.kill("SIGTERM");await once(child,"exit");}await rm(dir,{recursive:true,force:true});}
